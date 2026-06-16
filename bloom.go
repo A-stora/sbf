@@ -1,6 +1,9 @@
 package bloom
 
-import "hash/fnv"
+import (
+	"errors"
+	"hash/fnv"
+)
 
 type hashFunc func([]byte) uint64
 
@@ -12,15 +15,22 @@ type sbf struct {
 	h2 hashFunc
 }
 
-func NewSBF(m uint, k uint, h1 hashFunc, h2 hashFunc) *sbf {
+func NewSBF(m uint, k uint, h1 hashFunc, h2 hashFunc) (*sbf, error) {
 	// size of bitarray could be 63 bits higher than anticipated due to rounding to uint64 boundaries
+	if m == 0 {
+        return nil, errors.New("m must be greater than 0")
+    }
+    if k == 0 {
+        return nil, errors.New("k must be greater than 0")
+    }
+	
 	return &sbf{
 		b: make([]uint64, (m+63)/64),
 		m: m,
 		k: k,
 		h1: h1,
 		h2: h2,
-	}
+	}, nil
 }
 
 func NewDefaultSBF(m uint, k uint) *sbf {
@@ -42,31 +52,48 @@ func NewDefaultSBF(m uint, k uint) *sbf {
 	}
 }
 
-func (sbf *sbf) Add([]byte) {
-	// hash the input k times
+func (sbf *sbf) Add(data []byte) {
+	hashes := sbf.getKHashes(data)
 
-	// set correct bits in b for the hashed input
-	// bucketValue |= uint64(1) << 27 
+	for i := range hashes {
+		// use whole bitarray even if larger than provided m
+		pos := hashes[i] % uint64(len(sbf.b)*64)
+		bucket := pos/64
+		pos %= 64
+		sbf.b[bucket] |= uint64(1) << pos
+	}
 }
 
-func (sbf *sbf) contains(data []byte) bool {
+
+func (sbf *sbf) Contains(data []byte) bool {
 	// false return means definitely not in the set
 	// true means probably not in the set
 	
-	// implement lookup
+	hashes := sbf.getKHashes(data)
+	for i := range hashes {
+		pos := hashes[i] % uint64(len(sbf.b)*64)
+		bucket := pos/64
+		pos %= 64
 
-	return false
+		mask := uint64(1) << pos
+		isSet := (sbf.b[bucket] & mask) != 0
+		if !isSet {
+			return false
+		}
+	}
+
+	return true // go should add a ~maybe type
 }
 
 func (sbf *sbf) initialHashPair(data []byte) (uint64, uint64) {
     return sbf.h1(data), sbf.h2(data)
 }
 
-func (sbf *sbf) getKHashes(data []byte, k uint) []uint64 {
+func (sbf *sbf) getKHashes(data []byte) []uint64 {
     hash1, hash2 := sbf.initialHashPair(data) 
-    hashes := make([]uint64, k)
+    hashes := make([]uint64, sbf.k)
     
-    for i := 0; i < int(k); i++ {
+    for i := 0; i < int(sbf.k); i++ {
         hashes[i] = hash1 + uint64(i)*hash2
     }
     return hashes
